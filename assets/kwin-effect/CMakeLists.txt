@@ -14,7 +14,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui DBus)
+# KWin 6.8 headers pull in qqmlregistration.h transitively, so QtQml's include
+# directory is needed even though the effect itself does not use QML.
+find_package(Qt6 REQUIRED COMPONENTS Core Gui DBus Qml)
 
 # --- KWin (headers + libkwin) -------------------------------------------------
 set(KWIN_INCLUDE_DIR "/usr/include/kwin" CACHE PATH "KWin effect headers")
@@ -46,6 +48,7 @@ target_link_libraries(satur8_effect
     Qt6::Core
     Qt6::Gui
     Qt6::DBus
+    Qt6::Qml
     ${KWIN_LIBRARY}
     ${KF6_COREADDONS_LIBRARY}
     ${KF6_CONFIGCORE_LIBRARY}
