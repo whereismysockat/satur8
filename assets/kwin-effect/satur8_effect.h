@@ -13,10 +13,19 @@
 
 #pragma once
 
+#include <config-kwin.h>
 #include <effect/offscreeneffect.h>
 
 #include <QVector3D>
 #include <memory>
+
+// KWin 6.8 changed Effect::drawWindow() to return bool.
+#if PROJECT_VERSION_MAJOR > 6 \
+    || (PROJECT_VERSION_MAJOR == 6 && PROJECT_VERSION_MINOR >= 8)
+#define SATUR8_KWIN_DRAWWINDOW_BOOL 1
+#else
+#define SATUR8_KWIN_DRAWWINDOW_BOOL 0
+#endif
 
 namespace KWin
 {
@@ -43,12 +52,21 @@ public:
     bool isActive() const override;
 
 protected:
+#if SATUR8_KWIN_DRAWWINDOW_BOOL
+    bool drawWindow(const KWin::RenderTarget &renderTarget,
+                    const KWin::RenderViewport &viewport,
+                    KWin::EffectWindow *w,
+                    int mask,
+                    const KWin::Region &deviceRegion,
+                    KWin::WindowPaintData &data) override;
+#else
     void drawWindow(const KWin::RenderTarget &renderTarget,
                     const KWin::RenderViewport &viewport,
                     KWin::EffectWindow *w,
                     int mask,
                     const KWin::Region &deviceRegion,
                     KWin::WindowPaintData &data) override;
+#endif
 
 public Q_SLOTS:
     /// Live saturation control over D-Bus. 1.0 = unchanged, >1 = more vivid,

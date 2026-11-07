@@ -111,12 +111,21 @@ void Satur8Effect::redirectWindow(KWin::EffectWindow *w)
     setShader(w, m_shader.get());
 }
 
+#if SATUR8_KWIN_DRAWWINDOW_BOOL
+bool Satur8Effect::drawWindow(const KWin::RenderTarget &renderTarget,
+                                const KWin::RenderViewport &viewport,
+                                KWin::EffectWindow *w,
+                                int mask,
+                                const KWin::Region &deviceRegion,
+                                KWin::WindowPaintData &data)
+#else
 void Satur8Effect::drawWindow(const KWin::RenderTarget &renderTarget,
                                 const KWin::RenderViewport &viewport,
                                 KWin::EffectWindow *w,
                                 int mask,
                                 const KWin::Region &deviceRegion,
                                 KWin::WindowPaintData &data)
+#endif
 {
     if (m_shader) {
         // We're inside a frame here, so the GL context is current and it is safe
@@ -129,7 +138,12 @@ void Satur8Effect::drawWindow(const KWin::RenderTarget &renderTarget,
         m_shader->setUniform("linearize", m_linear ? 1 : 0);
         manager->popShader();
     }
+#if SATUR8_KWIN_DRAWWINDOW_BOOL
+    return KWin::OffscreenEffect::drawWindow(renderTarget, viewport, w, mask,
+                                             deviceRegion, data);
+#else
     KWin::OffscreenEffect::drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
+#endif
 }
 
 void Satur8Effect::reconfigure(ReconfigureFlags)
