@@ -6,6 +6,7 @@
 
 #include "satur8_effect.h"
 
+#include <core/output.h>
 #include <effect/effecthandler.h>
 #include <opengl/glshader.h>
 #include <opengl/glshadermanager.h>
@@ -68,10 +69,10 @@ Satur8Effect::Satur8Effect()
         kDBusPath, this, QDBusConnection::ExportScriptableContents);
 
     connect(KWin::effects, &KWin::EffectsHandler::windowAdded,
-            this, &Satur8Effect::redirectWindow);
+            this, &Satur8Effect::refreshWindow);
     const auto windows = KWin::effects->stackingOrder();
     for (KWin::EffectWindow *w : windows) {
-        redirectWindow(w);
+        refreshWindow(w);
     }
 }
 
@@ -102,9 +103,22 @@ bool Satur8Effect::ensureShader()
     return true;
 }
 
-void Satur8Effect::redirectWindow(KWin::EffectWindow *w)
+bool Satur8Effect::shouldAffect(const KWin::EffectWindow *w) const
+{
+    if (m_targetOutput.isEmpty()) {
+        return true;
+    }
+    const KWin::LogicalOutput *output = w ? w->screen() : nullptr;
+    return output && output->name() == m_targetOutput;
+}
+
+void Satur8Effect::refreshWindow(KWin::EffectWindow *w)
 {
     if (!w || !ensureShader()) {
+        return;
+    }
+    if (!shouldAffect(w)) {
+        unredirect(w);
         return;
     }
     redirect(w);
@@ -182,6 +196,41 @@ void Satur8Effect::setLinearLight(bool enabled)
 bool Satur8Effect::linearLight() const
 {
     return m_linear;
+}
+
+bool Satur8Effect::setTargetOutput(const QString &output)
+{
+    if (!output.isEmpty() && !KWin::effects->findScreen(output)) {
+        return false;
+    }
+    if (m_targetOutput == output) {
+        return true;
+    }
+    m_targetOutput = output;
+
+    const auto windows = KWin::effects->stackingOrder();
+    for (KWin::EffectWindow *w : windows) {
+        refreshWindow(w);
+    }
+    KWin::effects->addRepaintFull();
+    return true;
+}
+
+QString Satur8Effect::targetOutput() const
+{
+    return m_targetOutput;
+}
+
+QStringList Satur8Effect::outputNames() const
+{
+    QStringList names;
+    const auto screens = KWin::effects->screens();
+    for (const KWin::LogicalOutput *screen : screens) {
+        if (screen) {
+            names.append(screen->name());
+        }
+    }
+    return names;
 }
 
 KWIN_EFFECT_FACTORY(Satur8Effect, "metadata.json")

@@ -31,7 +31,7 @@ pub struct Profile {
     pub saturation: f32,
     #[serde(default, flatten)]
     pub match_rule: MatchRule,
-    /// Output ids to affect; empty = all outputs.
+    /// Output ids to affect; empty = all outputs for CLI/launch use, or the focused game's display for the focus daemon.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<String>,
 }

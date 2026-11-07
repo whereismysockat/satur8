@@ -220,7 +220,7 @@ A profile needs at least one match rule: `--exe`, `--window-class`, or `--steam-
 
 Satur8 has two ways to apply profiles automatically.
 
-**Focus daemon.** The normal KDE path. The KWin focus script forwards active-window changes to the daemon, which matches the focused game and applies its saturation.
+**Focus daemon.** The normal KDE path. The KWin focus script forwards active-window changes and the window's display to the daemon, which matches the focused game and applies its saturation only to that display. A profile with an explicit `outputs` list still targets those outputs.
 
 ```sh
 systemctl --user enable --now satur8-daemon

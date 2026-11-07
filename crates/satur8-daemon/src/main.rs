@@ -32,16 +32,29 @@ enum FocusAction {
 
 fn decide_focus_action(
     current: Option<&str>,
+    current_output: Option<&str>,
     window_class: &str,
+    focused_output: &str,
     profiles: &Profiles,
 ) -> FocusAction {
+    let focused_output = (!focused_output.trim().is_empty()).then(|| focused_output.trim());
     match profiles.match_window_class(window_class) {
-        Some(profile) if current == Some(profile.name.as_str()) => FocusAction::None,
-        Some(profile) => FocusAction::Apply {
-            profile: profile.name.clone(),
-            saturation: profile.saturation(),
-            outputs: profile.outputs.clone(),
-        },
+        Some(profile) => {
+            // An explicitly configured output list wins. Otherwise follow the isplay the focused window is on; an empty report (older focus scripts) keeps the old all-outputs behavior.
+            let outputs = if profile.outputs.is_empty() {
+                focused_output.iter().map(|id| id.to_string()).collect()
+            } else {
+                profile.outputs.clone()
+            };
+            if current == Some(profile.name.as_str()) && current_output == focused_output {
+                return FocusAction::None;
+            }
+            FocusAction::Apply {
+                profile: profile.name.clone(),
+                saturation: profile.saturation(),
+                outputs,
+            }
+        }
         None if current.is_some() => FocusAction::Restore,
         None => FocusAction::None,
     }
@@ -125,6 +138,8 @@ struct Daemon {
     profiles: Profiles,
     backend: Arc<Mutex<BackendState>>,
     current: Option<String>,
+    /// Output id reported by the compositor for the focused window.
+    current_output: Option<String>,
 }
 
 impl Daemon {
@@ -137,6 +152,7 @@ impl Daemon {
             profiles,
             backend,
             current: None,
+            current_output: None,
         }
     }
 
@@ -147,22 +163,38 @@ impl Daemon {
             profiles,
             backend: Arc::new(Mutex::new(BackendState::with_backend(backend, restore_to))),
             current: None,
+            current_output: None,
         }
     }
 
     fn react(&mut self, class: &str) {
+        self.react_on_output(class, "");
+    }
+
+    fn react_on_output(&mut self, class: &str, output: &str) {
         self.backend
             .lock()
             .expect("backend state mutex poisoned")
             .try_detect(self.profiles.default_saturation());
-        match decide_focus_action(self.current.as_deref(), class, &self.profiles) {
+        match decide_focus_action(
+            self.current.as_deref(),
+            self.current_output.as_deref(),
+            class,
+            output,
+            &self.profiles,
+        ) {
             FocusAction::Apply {
                 profile,
                 saturation,
                 outputs,
             } => {
+                let display = if output.trim().is_empty() {
+                    "all displays"
+                } else {
+                    output.trim()
+                };
                 eprintln!(
-                    "satur8-daemon: '{class}' -> profile '{profile}' ({:.2})",
+                    "satur8-daemon: '{class}' on {display} -> profile '{profile}' ({:.2})",
                     saturation.get()
                 );
                 let result = self
@@ -171,9 +203,14 @@ impl Daemon {
                     .expect("backend state mutex poisoned")
                     .apply(saturation, &outputs, self.profiles.default_saturation());
                 match result {
-                    Ok(()) => self.current = Some(profile),
+                    Ok(()) => {
+                        self.current = Some(profile);
+                        self.current_output =
+                            (!output.trim().is_empty()).then(|| output.trim().to_string());
+                    }
                     Err(error) => {
                         self.current = None;
+                        self.current_output = None;
                         eprintln!("satur8-daemon: apply failed: {error}");
                     }
                 }
@@ -186,6 +223,7 @@ impl Daemon {
                     .expect("backend state mutex poisoned")
                     .restore(self.profiles.default_saturation());
                 self.current = None;
+                self.current_output = None;
                 if let Err(error) = result {
                     eprintln!("satur8-daemon: restore failed: {error}");
                 }
@@ -197,6 +235,7 @@ impl Daemon {
     #[cfg(test)]
     fn invalidate_current(&mut self) {
         self.current = None;
+        self.current_output = None;
     }
 
     fn reload_profiles(&mut self) {
@@ -228,6 +267,7 @@ impl Daemon {
                 .expect("backend state mutex poisoned")
                 .restore(self.profiles.default_saturation());
             self.current = None;
+            self.current_output = None;
             if let Err(error) = result {
                 eprintln!("satur8-daemon: restore failed: {error}");
             }
@@ -235,7 +275,11 @@ impl Daemon {
         };
 
         let saturation = profile.saturation();
-        let outputs = profile.outputs.clone();
+        let outputs = if profile.outputs.is_empty() {
+            self.current_output.iter().cloned().collect()
+        } else {
+            profile.outputs.clone()
+        };
         eprintln!(
             "satur8-daemon: reapplied active profile '{current}' ({:.2})",
             saturation.get()
@@ -247,6 +291,7 @@ impl Daemon {
             .apply(saturation, &outputs, self.profiles.default_saturation());
         if let Err(error) = result {
             self.current = None;
+            self.current_output = None;
             eprintln!("satur8-daemon: apply failed: {error}");
         }
     }
@@ -254,9 +299,14 @@ impl Daemon {
 
 #[interface(name = "org.satur8.Daemon")]
 impl Daemon {
-    /// Called on every window activation.
+    /// Called on every window activation by older focus scripts that cannot report the window's display.
     fn window_activated(&mut self, class: String, _caption: String) {
         self.react(&class);
+    }
+
+    /// Called on every window activation. `output` is the compositor name of the display containing the focused window (empty if unknown).
+    fn window_activated_on_output(&mut self, class: String, _caption: String, output: String) {
+        self.react_on_output(&class, &output);
     }
 
     /// Re-read the profiles file from disk.
@@ -502,6 +552,41 @@ mod tests {
 
         daemon.react("game.class");
 
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [Call::Apply("DP-1", 1.5), Call::Apply("HDMI-A-1", 1.5)]
+        );
+    }
+
+    #[test]
+    fn focuses_only_the_display_the_game_is_on() {
+        let (mut daemon, calls, _) = setup();
+
+        daemon.react_on_output("game.class", "HDMI-A-1");
+
+        assert_eq!(daemon.current.as_deref(), Some("game"));
+        assert_eq!(daemon.current_output.as_deref(), Some("HDMI-A-1"));
+        assert_eq!(*calls.lock().unwrap(), [Call::Apply("HDMI-A-1", 1.5)]);
+    }
+
+    #[test]
+    fn configured_outputs_win_over_the_focused_display() {
+        let (mut daemon, calls, _) = setup();
+        daemon.profiles.profiles[0].outputs = vec!["DP-1".into()];
+
+        daemon.react_on_output("game.class", "HDMI-A-1");
+
+        assert_eq!(*calls.lock().unwrap(), [Call::Apply("DP-1", 1.5)]);
+    }
+
+    #[test]
+    fn moving_the_same_game_to_another_display_reapplies() {
+        let (mut daemon, calls, _) = setup();
+
+        daemon.react_on_output("game.class", "DP-1");
+        daemon.react_on_output("game.class", "HDMI-A-1");
+
+        assert_eq!(daemon.current_output.as_deref(), Some("HDMI-A-1"));
         assert_eq!(
             *calls.lock().unwrap(),
             [Call::Apply("DP-1", 1.5), Call::Apply("HDMI-A-1", 1.5)]

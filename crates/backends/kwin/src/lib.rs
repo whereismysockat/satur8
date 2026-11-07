@@ -146,6 +146,47 @@ impl KwinBackend {
                 BackendError::Apply(format!("couldn't set saturation (effect loaded?): {e}"))
             })
     }
+
+    /// Restrict the effect to one KWin output (empty = every output).
+    fn set_target_output(&self, output: &Output) -> Result<(), BackendError> {
+        let target = if output.id == "all" { "" } else { &output.id };
+        let reply = self
+            .conn
+            .call_method(
+                Some(KWIN_SERVICE),
+                EFFECT_PATH,
+                Some(EFFECT_IFACE),
+                "setTargetOutput",
+                &target,
+            )
+            .map_err(|e| {
+                BackendError::Apply(format!(
+                    "couldn't target output '{target}' (is the installed KWin effect current?): {e}"
+                ))
+            })?;
+        let found = reply.body().deserialize::<bool>().map_err(apply_err)?;
+        if !found {
+            return Err(BackendError::Apply(format!(
+                "KWin has no output named '{target}'"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The output names KWin is currently driving, for `satur8 outputs`.
+    fn output_names(&self) -> Result<Vec<String>, BackendError> {
+        let reply = self
+            .conn
+            .call_method(
+                Some(KWIN_SERVICE),
+                EFFECT_PATH,
+                Some(EFFECT_IFACE),
+                "outputNames",
+                &(),
+            )
+            .map_err(apply_err)?;
+        reply.body().deserialize::<Vec<String>>().map_err(apply_err)
+    }
 }
 
 impl Backend for KwinBackend {
@@ -158,14 +199,22 @@ impl Backend for KwinBackend {
     }
 
     fn outputs(&self) -> Vec<Output> {
-        // Per-output targeting is M7; for now the effect applies session-wide.
-        vec![Output {
-            id: "all".into(),
-            human_name: "All outputs".into(),
-        }]
+        match self.output_names() {
+            Ok(names) if !names.is_empty() => names
+                .into_iter()
+                .map(|id| Output {
+                    human_name: id.clone(),
+                    id,
+                })
+                .collect(),
+            _ => vec![Output {
+                id: "all".into(),
+                human_name: "All outputs".into(),
+            }],
+        }
     }
 
-    fn apply(&mut self, _output: &Output, saturation: Saturation) -> Result<(), BackendError> {
+    fn apply(&mut self, output: &Output, saturation: Saturation) -> Result<(), BackendError> {
         // Identity means "no change". Loading the effect at identity would
         // leave an unnecessary compositor pass running, so unload instead.
         if saturation.is_identity() {
@@ -173,11 +222,17 @@ impl Backend for KwinBackend {
             return Ok(());
         }
         self.load()?;
+        if let Err(error) = self.set_target_output(output) {
+            let _ = self.unload();
+            return Err(error);
+        }
         self.set_saturation(saturation)
     }
 
-    fn reset(&mut self, _output: &Output) -> Result<(), BackendError> {
-        // Identity then unload, so we leave no GPU pass running.
+    fn reset(&mut self, output: &Output) -> Result<(), BackendError> {
+        // Identity then unload, so we leave no GPU pass running. 
+        // Clear a per-output target first so the next apply starts from a known state.
+        let _ = self.set_target_output(output);
         let _ = self.set_saturation(Saturation::IDENTITY);
         self.unload()
     }

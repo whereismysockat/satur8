@@ -6,6 +6,8 @@
 // window itself - it only reports "this class is now focused" so the daemon can
 // apply or restore the matching per-game profile.
 //
+// The window's output name is forwarded too, so the daemon can limit the color change to the display the game is actually on.
+//
 // Zero polling: we react only to KWin's own windowActivated signal.
 
 function reportActive(window) {
@@ -13,13 +15,14 @@ function reportActive(window) {
         // Focus left to the desktop/null - report an empty class so the daemon
         // restores the default.
         callDBus("org.satur8.Daemon", "/org/satur8/Daemon",
-                 "org.satur8.Daemon", "WindowActivated", "", "");
+                 "org.satur8.Daemon", "WindowActivatedOnOutput", "", "", "");
         return;
     }
     var cls = window.resourceClass ? "" + window.resourceClass : "";
     var cap = window.caption ? "" + window.caption : "";
+    var output = window.output && window.output.name ? "" + window.output.name : "";
     callDBus("org.satur8.Daemon", "/org/satur8/Daemon",
-             "org.satur8.Daemon", "WindowActivated", cls, cap);
+             "org.satur8.Daemon", "WindowActivatedOnOutput", cls, cap, output);
 }
 
 // KWin 6 scripting API: workspace.windowActivated(window).

@@ -3,6 +3,20 @@
 All notable changes to Satur8, newest first. Each entry is also published as the
 GitHub release notes for that tag.
 
+## v0.3.4 - 2026-11-07
+
+Focus follows the game onto its own display.
+
+- The KWin focus script now reports which display holds the focused window. The
+  daemon applies a matching profile only to that display instead of changing
+  every monitor in the session.
+- Moving the same game to another display reapplies the profile there. A profile
+  with an explicit `outputs` list still wins over the focused display.
+- The KWin effect gained per-output targeting, and `satur8 outputs` now lists
+  KWin's current display names when the effect is loaded.
+- Older focus scripts that don't report a display still work and keep the
+  previous all-displays behavior.
+
 ## v0.3.3 - 2026-06-26
 
 Backend sweep plus a full code audit of the stateful paths.

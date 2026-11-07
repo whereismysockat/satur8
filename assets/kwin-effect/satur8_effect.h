@@ -16,6 +16,8 @@
 #include <config-kwin.h>
 #include <effect/offscreeneffect.h>
 
+#include <QString>
+#include <QStringList>
 #include <QVector3D>
 #include <memory>
 
@@ -76,13 +78,20 @@ public Q_SLOTS:
     /// Blend in linear light (more correct) instead of gamma-encoded sRGB.
     Q_SCRIPTABLE void setLinearLight(bool enabled);
     Q_SCRIPTABLE bool linearLight() const;
+    /// Restrict the effect to one output (empty = every output). Returns false if the named output is not currently connected.
+    Q_SCRIPTABLE bool setTargetOutput(const QString &output);
+    Q_SCRIPTABLE QString targetOutput() const;
+    /// Names of the outputs KWin is currently driving.
+    Q_SCRIPTABLE QStringList outputNames() const;
 
 private:
-    void redirectWindow(KWin::EffectWindow *w);
+    void refreshWindow(KWin::EffectWindow *w);
+    bool shouldAffect(const KWin::EffectWindow *w) const;
     bool ensureShader();
 
     std::unique_ptr<KWin::GLShader> m_shader;
     double m_saturation = 1.0;
     bool m_linear = false;
     bool m_shaderFailed = false;
+    QString m_targetOutput;
 };
