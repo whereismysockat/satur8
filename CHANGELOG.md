@@ -3,7 +3,7 @@
 All notable changes to Satur8, newest first. Each entry is also published as the
 GitHub release notes for that tag.
 
-## v0.3.4 - 2026-11-07
+## v0.3.4 - 2026-11-10
 
 Focus follows the game onto its own display.
 

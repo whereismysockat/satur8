@@ -7,7 +7,7 @@
 # the crates vendored instead, because Koji builds offline.
 
 Name:           satur8
-Version:        0.3.3
+Version:        0.3.4
 Release:        1%{?dist}
 Summary:        Per-game digital vibrance for Linux
 
@@ -122,6 +122,11 @@ install -Dm0644 packaging/satur8.desktop \
 %{_datadir}/applications/satur8.desktop
 
 %changelog
+* Tue Nov 10 2026 Satur8 <whereismysockat> - 0.3.4-1
+- Apply focused-game saturation only to the game's display.
+- Match Proton games by process exe when the window class is generic.
+- Fix Wine/Proton process names containing spaces in the GUI app picker.
+
 * Wed Jun 24 2026 Satur8 <ntrpydev@pm.me> - 0.3.0-1
 - Add a gamescope-native run strategy that drives a running gamescope compositor
   with runtime shaper and 3D LUT override atoms.
