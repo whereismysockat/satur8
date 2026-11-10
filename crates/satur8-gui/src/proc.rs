@@ -98,13 +98,28 @@ fn is_wine_loader(name: &str) -> bool {
 fn is_wine_system_exe(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     let stem = lower.strip_suffix(".exe").unwrap_or(&lower);
-    WINE_SYSTEM_EXES.iter().any(|exe| *exe == stem) || is_wine_loader(stem)
+    WINE_SYSTEM_EXES.iter().any(|exe| *exe == stem)
+        || is_wine_loader(stem)
+        // Crash reporters and accessibility helpers are not the game. Some,
+        // such as xalia.exe, are bundled by Proton.
+        || stem == "xalia"
+        || stem.ends_with("crashhandler")
+        || stem.ends_with("crashreporter")
+        || stem.starts_with("crashpad")
+}
+
+/// Does this string look like a complete Windows image name?
+fn has_windows_image_suffix(name: &str) -> bool {
+    let lower = name.trim().trim_matches('"').to_ascii_lowercase();
+    [".exe", ".bat", ".com", ".scr"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 /// Turn a Wine `argv[0]` (usually a Windows path) into the game's exe name.
 /// Returns `None` for Wine's own system processes and loaders.
 fn wine_image_name(argv0: &str) -> Option<String> {
-    let argv0 = argv0.trim();
+    let argv0 = argv0.trim().trim_matches('"').trim();
     if argv0.is_empty() {
         return None;
     }
@@ -119,13 +134,43 @@ fn wine_image_name(argv0: &str) -> Option<String> {
     Some(name.to_string())
 }
 
-fn wine_process_name(pid: &str) -> Option<String> {
-    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let argv0 = cmdline.split(|b| *b == 0).next()?;
-    if argv0.is_empty() {
+/// Wine sometimes exposes a process title whose executable path was split at
+/// spaces, so `/proc/<pid>/cmdline` first yields only e.g. `C:\Program`. Join
+/// the following tokens until the image name has a real executable suffix, so
+/// "Call of Duty ...\game.exe" isn't reported as just "Call".
+fn wine_image_name_from_cmdline(cmdline: &[u8]) -> Option<String> {
+    let mut parts = cmdline.split(|b| *b == 0).filter(|part| !part.is_empty());
+    let first = String::from_utf8_lossy(parts.next()?).into_owned();
+    let mut image = first.trim().trim_matches('"').trim().to_string();
+    if image.is_empty() {
         return None;
     }
-    wine_image_name(&String::from_utf8_lossy(argv0))
+
+    if !has_windows_image_suffix(&image) {
+        for part in parts.take(64) {
+            let part = String::from_utf8_lossy(part);
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            // A command-line switch means the image path ended before it.
+            if part.starts_with('-') {
+                break;
+            }
+            image.push(' ');
+            image.push_str(part);
+            if has_windows_image_suffix(&image) {
+                break;
+            }
+        }
+    }
+
+    wine_image_name(&image)
+}
+
+fn wine_process_name(pid: &str) -> Option<String> {
+    let cmdline = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    wine_image_name_from_cmdline(&cmdline)
 }
 
 /// Read a process's environment for `SteamAppId` / `SteamGameId`.
@@ -185,5 +230,43 @@ mod tests {
         assert!(is_wine_loader("wine64-preloader"));
         assert!(is_wine_loader("wine-preloader"));
         assert!(!is_wine_loader("juvio.exe"));
+    }
+
+    #[test]
+    fn splits_on_spaces_are_rejoined_into_the_full_game_exe() {
+        let cmdline = b"S:\\\\user\\Games\\Call of Duty Modern Warfare 4\\game\\game\\sp26\\sp26-cod.exe\0hdey\0--project\0cod\0";
+
+        assert_eq!(
+            wine_image_name_from_cmdline(cmdline).as_deref(),
+            Some("sp26-cod.exe")
+        );
+    }
+
+    #[test]
+    fn quoted_paths_with_spaces_are_rejoined() {
+        let cmdline = b"\"C:\\Program Files\\My Game\\My Game.exe\"\0";
+
+        assert_eq!(
+            wine_image_name_from_cmdline(cmdline).as_deref(),
+            Some("My Game.exe")
+        );
+    }
+
+    #[test]
+    fn crash_handlers_and_accessibility_helpers_are_skipped() {
+        for cmdline in [
+            b"S:\\\\user\\Games\\Call of Duty Modern Warfare 4\\game\\game\\sp26\\\\codCrashHandler.exe\0hdey\0--project\0cod\0".as_slice(),
+            b"\\\\?\\S:\\user\\Games\\Call of Duty Modern Warfare 4\\wine\\share\\xalia\\xalia.exe\0".as_slice(),
+        ] {
+            assert_eq!(wine_image_name_from_cmdline(cmdline), None);
+        }
+    }
+
+    #[test]
+    fn native_process_names_with_spaces_are_kept() {
+        assert_eq!(
+            wine_image_name("/games/My Game").as_deref(),
+            Some("My Game")
+        );
     }
 }

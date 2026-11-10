@@ -14,6 +14,12 @@ Focus follows the game onto its own display.
   with an explicit `outputs` list still wins over the focused display.
 - The KWin effect gained per-output targeting, and `satur8 outputs` now lists
   KWin's current display names when the effect is loaded.
+- Fix the GUI running-app picker for Wine/Proton games whose executable path
+  contains spaces: it now rejoins the split process title instead of listing a
+  fragment like "Call" as the game. Wine crash handlers and xalia are skipped.
+- The focus daemon now matches a profile by the focused window's process exe
+  when Proton reports a generic class such as `steam_app_default`, so games
+  like Call of Duty are recognized even when the class does not name the game.
 - Older focus scripts that don't report a display still work and keep the
   previous all-displays behavior.
 

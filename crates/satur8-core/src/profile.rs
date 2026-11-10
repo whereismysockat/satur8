@@ -94,11 +94,21 @@ impl Profiles {
 
     /// Find a profile by window class / app id (case-insensitive).
     pub fn match_window_class(&self, class: &str) -> Option<&Profile> {
+        self.match_focus(class, None)
+    }
+
+    /// Find a profile by focused-window class or by the owning process's exe.
+    ///
+    /// Proton often reports a generic window class (`steam_app_default`) that
+    /// does not identify the game, so the exe resolved from the window PID is
+    /// needed as a second match key. First profile in file order wins.
+    pub fn match_focus(&self, class: &str, exe: Option<&str>) -> Option<&Profile> {
         let class = class.trim();
         let class_norm = normalize_game_id(class);
         let steam_app_id = class_norm
             .strip_prefix("steam_app_")
             .and_then(|id| id.parse::<u32>().ok());
+        let exe_norm = exe.map(normalize_game_id).filter(|exe| !exe.is_empty());
 
         self.profiles.iter().find(|p| {
             p.match_rule
@@ -110,6 +120,12 @@ impl Profiles {
                     .as_deref()
                     .is_some_and(|e| normalize_game_id(e) == class_norm)
                 || steam_app_id.is_some_and(|app_id| p.match_rule.steam_app_id == Some(app_id))
+                || exe_norm.as_deref().is_some_and(|exe| {
+                    p.match_rule
+                        .exe
+                        .as_deref()
+                        .is_some_and(|e| normalize_game_id(e) == exe)
+                })
         })
     }
 
@@ -259,6 +275,60 @@ mod tests {
         assert_eq!(p.match_window_class("cs2.x86_64").unwrap().name, "cs2");
         assert_eq!(p.match_window_class("steam_app_730").unwrap().name, "cs2");
         assert!(p.match_window_class("unknown").is_none());
+    }
+
+    #[test]
+    fn focus_match_uses_exe_when_proton_class_is_generic() {
+        let p = sample();
+        assert_eq!(
+            p.match_focus("steam_app_default", Some("cs2.x86_64"))
+                .unwrap()
+                .name,
+            "cs2"
+        );
+        assert_eq!(
+            p.match_focus("steam_app_default", Some("dota2.exe"))
+                .unwrap()
+                .name,
+            "Dota 2"
+        );
+        assert!(p.match_focus("steam_app_default", None).is_none());
+    }
+
+    #[test]
+    fn focus_match_keeps_file_order_when_class_and_exe_both_match() {
+        let p = Profiles {
+            default_saturation: 1.0,
+            profiles: vec![
+                Profile {
+                    name: "by-exe".into(),
+                    saturation: 1.2,
+                    match_rule: MatchRule {
+                        exe: Some("game.exe".into()),
+                        window_class: None,
+                        steam_app_id: None,
+                    },
+                    outputs: vec![],
+                },
+                Profile {
+                    name: "by-class".into(),
+                    saturation: 1.8,
+                    match_rule: MatchRule {
+                        exe: None,
+                        window_class: Some("steam_app_default".into()),
+                        steam_app_id: None,
+                    },
+                    outputs: vec![],
+                },
+            ],
+        };
+
+        assert_eq!(
+            p.match_focus("steam_app_default", Some("game.exe"))
+                .unwrap()
+                .name,
+            "by-exe"
+        );
     }
 
     #[test]

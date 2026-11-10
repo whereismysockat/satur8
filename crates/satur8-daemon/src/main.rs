@@ -34,11 +34,12 @@ fn decide_focus_action(
     current: Option<&str>,
     current_output: Option<&str>,
     window_class: &str,
+    focused_exe: Option<&str>,
     focused_output: &str,
     profiles: &Profiles,
 ) -> FocusAction {
     let focused_output = (!focused_output.trim().is_empty()).then(|| focused_output.trim());
-    match profiles.match_window_class(window_class) {
+    match profiles.match_focus(window_class, focused_exe) {
         Some(profile) => {
             // An explicitly configured output list wins. Otherwise follow the isplay the focused window is on; an empty report (older focus scripts) keeps the old all-outputs behavior.
             let outputs = if profile.outputs.is_empty() {
@@ -58,6 +59,88 @@ fn decide_focus_action(
         None if current.is_some() => FocusAction::Restore,
         None => FocusAction::None,
     }
+}
+
+const WINE_LOADERS: &[&str] = &["wine", "wine64", "wine-preloader", "wine64-preloader"];
+
+/// Best-effort executable name for the process owning a focused window.
+///
+/// Native processes use `/proc/<pid>/exe`. Wine/Proton processes all share a
+/// loader there, so their real image name comes from the process title. Wine
+/// can split a path containing spaces into separate argv entries, so the
+/// tokens are rejoined until a Windows image suffix is found.
+fn process_image_name(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    let exe_name = std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        });
+    if let Some(name) = &exe_name {
+        if !is_wine_loader(name) {
+            return Some(name.clone());
+        }
+    }
+    if let Some(name) = std::fs::read(format!("/proc/{pid}/cmdline"))
+        .ok()
+        .and_then(|cmdline| wine_image_name_from_cmdline(&cmdline))
+    {
+        return Some(name);
+    }
+    exe_name
+}
+
+fn is_wine_loader(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    WINE_LOADERS.iter().any(|loader| *loader == lower)
+}
+
+fn has_windows_image_suffix(name: &str) -> bool {
+    let lower = name.trim().trim_matches('"').to_ascii_lowercase();
+    [".exe", ".bat", ".com", ".scr"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+}
+
+fn wine_image_name_from_cmdline(cmdline: &[u8]) -> Option<String> {
+    let mut parts = cmdline
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty());
+    let first = String::from_utf8_lossy(parts.next()?).into_owned();
+    let mut image = first.trim().trim_matches('"').trim().to_string();
+    if image.is_empty() {
+        return None;
+    }
+
+    if !has_windows_image_suffix(&image) {
+        for part in parts.take(64) {
+            let part = String::from_utf8_lossy(part);
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if part.starts_with('-') {
+                break;
+            }
+            image.push(' ');
+            image.push_str(part);
+            if has_windows_image_suffix(&image) {
+                break;
+            }
+        }
+    }
+
+    let name = image
+        .trim()
+        .trim_matches('"')
+        .rsplit(|c| c == '\\' || c == '/')
+        .next()
+        .unwrap_or("")
+        .trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 struct BackendState {
@@ -172,6 +255,15 @@ impl Daemon {
     }
 
     fn react_on_output(&mut self, class: &str, output: &str) {
+        self.react_on_pid(class, output, 0);
+    }
+
+    fn react_on_pid(&mut self, class: &str, output: &str, pid: u32) {
+        let focused_exe = process_image_name(pid);
+        self.react_with_exe(class, output, focused_exe.as_deref());
+    }
+
+    fn react_with_exe(&mut self, class: &str, output: &str, focused_exe: Option<&str>) {
         self.backend
             .lock()
             .expect("backend state mutex poisoned")
@@ -180,6 +272,7 @@ impl Daemon {
             self.current.as_deref(),
             self.current_output.as_deref(),
             class,
+            focused_exe,
             output,
             &self.profiles,
         ) {
@@ -307,6 +400,19 @@ impl Daemon {
     /// Called on every window activation. `output` is the compositor name of the display containing the focused window (empty if unknown).
     fn window_activated_on_output(&mut self, class: String, _caption: String, output: String) {
         self.react_on_output(&class, &output);
+    }
+
+    /// Called on every window activation with the owning process id, so games
+    /// with a generic Proton window class can still match their exe profile.
+    fn window_activated_with_pid(
+        &mut self,
+        class: String,
+        _caption: String,
+        output: String,
+        pid: i32,
+    ) {
+        let pid = u32::try_from(pid).unwrap_or(0);
+        self.react_on_pid(&class, &output, pid);
     }
 
     /// Re-read the profiles file from disk.
@@ -440,6 +546,7 @@ mod tests {
             let output = match output.id.as_str() {
                 "all" => "all",
                 "DP-1" => "DP-1",
+                "DP-2" => "DP-2",
                 "HDMI-A-1" => "HDMI-A-1",
                 other => panic!("unexpected output {other}"),
             };
@@ -590,6 +697,28 @@ mod tests {
         assert_eq!(
             *calls.lock().unwrap(),
             [Call::Apply("DP-1", 1.5), Call::Apply("HDMI-A-1", 1.5)]
+        );
+    }
+
+    #[test]
+    fn matches_a_proton_game_by_its_process_exe() {
+        let (mut daemon, calls, _) = setup();
+        daemon.profiles.profiles[0].match_rule.window_class = None;
+        daemon.profiles.profiles[0].match_rule.exe = Some("sp26-cod.exe".into());
+
+        daemon.react_with_exe("steam_app_default", "DP-2", Some("sp26-cod.exe"));
+
+        assert_eq!(daemon.current.as_deref(), Some("game"));
+        assert_eq!(*calls.lock().unwrap(), [Call::Apply("DP-2", 1.5)]);
+    }
+
+    #[test]
+    fn wine_process_titles_with_spaces_resolve_to_the_exe() {
+        let cmdline = b"S:\\\\user\\Games\\Call of Duty Modern Warfare 4\\game\\game\\sp26\\sp26-cod.exe\0hdey\0";
+
+        assert_eq!(
+            wine_image_name_from_cmdline(cmdline).as_deref(),
+            Some("sp26-cod.exe")
         );
     }
 }

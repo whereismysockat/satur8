@@ -15,14 +15,17 @@ function reportActive(window) {
         // Focus left to the desktop/null - report an empty class so the daemon
         // restores the default.
         callDBus("org.satur8.Daemon", "/org/satur8/Daemon",
-                 "org.satur8.Daemon", "WindowActivatedOnOutput", "", "", "");
+                 "org.satur8.Daemon", "WindowActivatedWithPid", "", "", "", 0);
         return;
     }
     var cls = window.resourceClass ? "" + window.resourceClass : "";
     var cap = window.caption ? "" + window.caption : "";
     var output = window.output && window.output.name ? "" + window.output.name : "";
+    // Proton games can share a generic class (steam_app_default). The owning
+    // pid lets the daemon resolve the real exe and match the right profile.
+    var pid = window.pid ? window.pid : 0;
     callDBus("org.satur8.Daemon", "/org/satur8/Daemon",
-             "org.satur8.Daemon", "WindowActivatedOnOutput", cls, cap, output);
+             "org.satur8.Daemon", "WindowActivatedWithPid", cls, cap, output, pid);
 }
 
 // KWin 6 scripting API: workspace.windowActivated(window).

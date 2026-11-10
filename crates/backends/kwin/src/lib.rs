@@ -230,7 +230,7 @@ impl Backend for KwinBackend {
     }
 
     fn reset(&mut self, output: &Output) -> Result<(), BackendError> {
-        // Identity then unload, so we leave no GPU pass running. 
+        // Identity then unload, so we leave no GPU pass running.
         // Clear a per-output target first so the next apply starts from a known state.
         let _ = self.set_target_output(output);
         let _ = self.set_saturation(Saturation::IDENTITY);
